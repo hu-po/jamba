@@ -10,8 +10,6 @@ import jax.lax as lax
 import jax.numpy as jnp
 from jax import jit, grad, random
 from jax.example_libraries import optimizers
-from jax.example_libraries import stax
-from jax.example_libraries.stax import Dense, Relu, LogSoftmax
 
 import numpy as np
 
@@ -19,238 +17,288 @@ _DATA = "/tmp/jax_example_data/"
 
 
 def check_gpu():
-  print("jax.devices:", jax.devices())
-  print("jax.default_backend():", jax.default_backend())
-  try:
-      _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
-      return True
-  except:
-      return False
+    print("jax.devices:", jax.devices())
+    print("jax.default_backend():", jax.default_backend())
+    try:
+        _ = jax.device_put(jax.numpy.ones(1), device=jax.devices("gpu")[0])
+        return True
+    except:
+        return False
 
 
 def _download(url, filename):
-  """Download a url to a file in the JAX data temp directory."""
-  if not path.exists(_DATA):
-    os.makedirs(_DATA)
-  out_file = path.join(_DATA, filename)
-  if not path.isfile(out_file):
-    urllib.request.urlretrieve(url, out_file)
-    print(f"downloaded {url} to {_DATA}")
+    """Download a url to a file in the JAX data temp directory."""
+    if not path.exists(_DATA):
+        os.makedirs(_DATA)
+    out_file = path.join(_DATA, filename)
+    if not path.isfile(out_file):
+        urllib.request.urlretrieve(url, out_file)
+        print(f"downloaded {url} to {_DATA}")
 
 
 def _partial_flatten(x):
-  """Flatten all but the first dimension of an ndarray."""
-  return np.reshape(x, (x.shape[0], -1))
+    """Flatten all but the first dimension of an ndarray."""
+    return np.reshape(x, (x.shape[0], -1))
 
 
 def _one_hot(x, k, dtype=np.float32):
-  """Create a one-hot encoding of x of size k."""
-  return np.array(x[:, None] == np.arange(k), dtype)
+    """Create a one-hot encoding of x of size k."""
+    return np.array(x[:, None] == np.arange(k), dtype)
 
 
 def mnist_raw():
-  """Download and parse the raw MNIST dataset."""
-  # CVDF mirror of http://yann.lecun.com/exdb/mnist/
-  base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
+    """Download and parse the raw MNIST dataset."""
+    # CVDF mirror of http://yann.lecun.com/exdb/mnist/
+    base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
 
-  def parse_labels(filename):
-    with gzip.open(filename, "rb") as fh:
-      _ = struct.unpack(">II", fh.read(8))
-      return np.array(array.array("B", fh.read()), dtype=np.uint8)
+    def parse_labels(filename):
+        with gzip.open(filename, "rb") as fh:
+            _ = struct.unpack(">II", fh.read(8))
+            return np.array(array.array("B", fh.read()), dtype=np.uint8)
 
-  def parse_images(filename):
-    with gzip.open(filename, "rb") as fh:
-      _, num_data, rows, cols = struct.unpack(">IIII", fh.read(16))
-      return np.array(array.array("B", fh.read()),
-                      dtype=np.uint8).reshape(num_data, rows, cols)
+    def parse_images(filename):
+        with gzip.open(filename, "rb") as fh:
+            _, num_data, rows, cols = struct.unpack(">IIII", fh.read(16))
+            return np.array(array.array("B", fh.read()), dtype=np.uint8).reshape(
+                num_data, rows, cols
+            )
 
-  for filename in ["train-images-idx3-ubyte.gz", "train-labels-idx1-ubyte.gz",
-                   "t10k-images-idx3-ubyte.gz", "t10k-labels-idx1-ubyte.gz"]:
-    _download(base_url + filename, filename)
+    for filename in [
+        "train-images-idx3-ubyte.gz",
+        "train-labels-idx1-ubyte.gz",
+        "t10k-images-idx3-ubyte.gz",
+        "t10k-labels-idx1-ubyte.gz",
+    ]:
+        _download(base_url + filename, filename)
 
-  train_images = parse_images(path.join(_DATA, "train-images-idx3-ubyte.gz"))
-  train_labels = parse_labels(path.join(_DATA, "train-labels-idx1-ubyte.gz"))
-  test_images = parse_images(path.join(_DATA, "t10k-images-idx3-ubyte.gz"))
-  test_labels = parse_labels(path.join(_DATA, "t10k-labels-idx1-ubyte.gz"))
+    train_images = parse_images(path.join(_DATA, "train-images-idx3-ubyte.gz"))
+    train_labels = parse_labels(path.join(_DATA, "train-labels-idx1-ubyte.gz"))
+    test_images = parse_images(path.join(_DATA, "t10k-images-idx3-ubyte.gz"))
+    test_labels = parse_labels(path.join(_DATA, "t10k-labels-idx1-ubyte.gz"))
 
-  return train_images, train_labels, test_images, test_labels
+    return train_images, train_labels, test_images, test_labels
 
 
 def mnist(permute_train=False):
-  """Download, parse and process MNIST data to unit scale and one-hot labels."""
-  train_images, train_labels, test_images, test_labels = mnist_raw()
+    """Download, parse and process MNIST data to unit scale and one-hot labels."""
+    train_images, train_labels, test_images, test_labels = mnist_raw()
 
-  train_images = _partial_flatten(train_images) / np.float32(255.)
-  test_images = _partial_flatten(test_images) / np.float32(255.)
-  train_labels = _one_hot(train_labels, 10)
-  test_labels = _one_hot(test_labels, 10)
+    train_images = _partial_flatten(train_images) / np.float32(255.0)
+    test_images = _partial_flatten(test_images) / np.float32(255.0)
+    train_labels = _one_hot(train_labels, 10)
+    test_labels = _one_hot(test_labels, 10)
 
-  if permute_train:
-    perm = np.random.RandomState(0).permutation(train_images.shape[0])
-    train_images = train_images[perm]
-    train_labels = train_labels[perm]
+    if permute_train:
+        perm = np.random.RandomState(0).permutation(train_images.shape[0])
+        train_images = train_images[perm]
+        train_labels = train_labels[perm]
 
-  return train_images, train_labels, test_images, test_labels
+    return train_images, train_labels, test_images, test_labels
 
 
 def linear(x, weight, bias):
-  """Applies a linear transformation to the input."""
-  return x @ weight + bias
+    """Applies a linear transformation to the input."""
+    return x @ weight + bias
+
 
 def causal_conv1d(x, weight, bias):
-  """Performs causal convolution on the input sequence."""
-  padding = [(weight.shape[-1] - 1, 0)]  # Causal padding
-  out = lax.conv(x, weight, (1,), padding, dimension_numbers=('NWC', 'WIO', 'NWC'))
-  return out + bias
+    """Performs causal convolution on the input sequence."""
+    padding = [(weight.shape[-1] - 1, 0)]  # Causal padding
+    out = lax.conv(x, weight, (1,), padding, dimension_numbers=("NWC", "WIO", "NWC"))
+    return out + bias
 
-def selective_scan(input_sequence, delta, state_transition_matrix, input_matrix, output_matrix, skip_matrix):
-  """Implements the selective scan algorithm using jax.lax.scan."""
-  def scan_func(state, inputs):
-    current_input, delta, input_matrix, output_matrix = inputs
-    updated_state = jnp.exp(delta @ state_transition_matrix) * state + delta @ input_matrix * current_input
-    output = updated_state @ output_matrix
-    return updated_state, output
-  
-  initial_state = jnp.zeros_like(input_sequence[:, :, :1])
-  _, outputs = lax.scan(scan_func, initial_state, (input_sequence, delta, input_matrix, output_matrix))
-  return outputs + input_sequence * skip_matrix
+
+def selective_scan(
+    input_sequence,
+    delta,
+    state_transition_matrix,
+    input_matrix,
+    output_matrix,
+    skip_matrix,
+):
+    """Implements the selective scan algorithm using jax.lax.scan."""
+
+    def scan_func(state, inputs):
+        current_input, delta, input_matrix, output_matrix = inputs
+        updated_state = (
+            jnp.exp(delta @ state_transition_matrix) * state
+            + delta @ input_matrix * current_input
+        )
+        output = updated_state @ output_matrix
+        return updated_state, output
+
+    initial_state = jnp.zeros_like(input_sequence[:, :, :1])
+    _, outputs = lax.scan(
+        scan_func, initial_state, (input_sequence, delta, input_matrix, output_matrix)
+    )
+    return outputs + input_sequence * skip_matrix
+
 
 def rms_norm(x, weight, bias, eps=1e-6):
-  """Applies RMS normalization to the input."""
-  variance = jnp.mean(x**2, axis=-1, keepdims=True)
-  normalized_x = x * jax.lax.rsqrt(variance + eps)
-  return normalized_x * weight + bias
+    """Applies RMS normalization to the input."""
+    variance = jnp.mean(x**2, axis=-1, keepdims=True)
+    normalized_x = x * jax.lax.rsqrt(variance + eps)
+    return normalized_x * weight + bias
 
 
 def mamba_block(x, params):
-  """Implements a single Mamba block."""
-  input_proj_weight, input_proj_bias, conv_weight, conv_bias, x_proj_weight, dt_proj_weight, dt_proj_bias, state_transition_matrix_log, skip_matrix, output_proj_weight, output_proj_bias = params
-  projected_input = linear(x, input_proj_weight, input_proj_bias)
-  x, z = jnp.split(projected_input, 2, axis=-1)
-  x = causal_conv1d(x, conv_weight, conv_bias)
-  x = jax.nn.silu(x)
-  x_dbl = linear(x, x_proj_weight, None)
-  dt_rank, d_state = dt_proj_weight.shape[0], state_transition_matrix_log.shape[1]
-  delta, input_matrix, output_matrix = jnp.split(x_dbl, [dt_rank, d_state, d_state], axis=-1)
-  delta = linear(delta, dt_proj_weight, dt_proj_bias)
-  delta = jax.nn.softplus(delta)
-  state_transition_matrix = -jnp.exp(state_transition_matrix_log)
-  y = selective_scan(x, delta, state_transition_matrix, input_matrix, output_matrix, skip_matrix)
-  out = linear(y, output_proj_weight, output_proj_bias)
-  return out
+    """Implements a single Mamba block."""
+    (
+        input_proj_weight,
+        input_proj_bias,
+        conv_weight,
+        conv_bias,
+        x_proj_weight,
+        dt_proj_weight,
+        dt_proj_bias,
+        state_transition_matrix_log,
+        skip_matrix,
+        output_proj_weight,
+        output_proj_bias,
+    ) = params
+    projected_input = linear(x, input_proj_weight, input_proj_bias)
+    x, z = jnp.split(projected_input, 2, axis=-1)
+    x = causal_conv1d(x, conv_weight, conv_bias)
+    x = jax.nn.silu(x)
+    x_dbl = linear(x, x_proj_weight, None)
+    dt_rank, d_state = dt_proj_weight.shape[0], state_transition_matrix_log.shape[1]
+    delta, input_matrix, output_matrix = jnp.split(
+        x_dbl, [dt_rank, d_state, d_state], axis=-1
+    )
+    delta = linear(delta, dt_proj_weight, dt_proj_bias)
+    delta = jax.nn.softplus(delta)
+    state_transition_matrix = -jnp.exp(state_transition_matrix_log)
+    y = selective_scan(
+        x, delta, state_transition_matrix, input_matrix, output_matrix, skip_matrix
+    )
+    out = linear(y, output_proj_weight, output_proj_bias)
+    return out
 
 
 def residual_block(x, params):
-  """Implements a ResidualBlock with MambaBlock and RMS normalization."""
-  mamba_params, norm_weight, norm_bias = params
-  y = mamba_block(x, mamba_params)
-  y = rms_norm(y, norm_weight, norm_bias)
-  out = x + y
-  return out
+    """Implements a ResidualBlock with MambaBlock and RMS normalization."""
+    mamba_params, norm_weight, norm_bias = params
+    y = mamba_block(x, mamba_params)
+    y = rms_norm(y, norm_weight, norm_bias)
+    out = x + y
+    return out
+
 
 def cross_entropy_loss(params, batch):
-  """Computes cross-entropy loss for Mamba model on MNIST."""
-  images, labels = batch
-  logits = model(images, params)
-  return -jnp.mean(jnp.sum(jax.nn.log_softmax(logits) * labels, axis=-1))
+    """Computes cross-entropy loss for Mamba model on MNIST."""
+    images, labels = batch
+    logits = model(images, params)
+    return -jnp.mean(jnp.sum(jax.nn.log_softmax(logits) * labels, axis=-1))
+
 
 def accuracy(params, batch):
-  """Computes accuracy for Mamba model on MNIST."""
-  images, labels = batch
-  predicted_labels = jnp.argmax(model(images, params), axis=-1)
-  return jnp.mean(predicted_labels == jnp.argmax(labels, axis=-1))
+    """Computes accuracy for Mamba model on MNIST."""
+    images, labels = batch
+    predicted_labels = jnp.argmax(model(images, params), axis=-1)
+    return jnp.mean(predicted_labels == jnp.argmax(labels, axis=-1))
+
 
 def model(images, params):
-  """Mamba model for MNIST classification."""
-  flat_images = jnp.reshape(images, (images.shape[0], -1))
-  x = flat_images
-  for block_params in params["residual_blocks"]:
-    x = residual_block(x, block_params)
-  logits = linear(x, params["output_weight"], params["output_bias"])
-  return logits
+    """Mamba model for MNIST classification."""
+    flat_images = jnp.reshape(images, (images.shape[0], -1))
+    x = flat_images
+    for block_params in params["residual_blocks"]:
+        x = residual_block(x, block_params)
+    logits = linear(x, params["output_weight"], params["output_bias"])
+    return logits
+
 
 if __name__ == "__main__":
-  # Set random seed
-  rng = random.PRNGKey(0)
-
-  # Hyperparameters (adjust as needed)
-  step_size = 0.001
-  num_epochs = 10
-  batch_size = 128
-  momentum_mass = 0.9
-
-  # Load MNIST dataset
-  train_images, train_labels, test_images, test_labels = mnist()
-  num_train = train_images.shape[0]
-
-  # Estimated parameter values (adjust based on your model configuration)
-  d_model = 64  # hidden dimension
-  d_state = 16  # state dimension
-  d_conv = 4  # convolution kernel size
-  expand = 2  # expansion factor
-  dt_rank = 160  # delta rank
-  dt_min = 0.001  # minimum delta value
-  dt_max = 0.1  # maximum delta value
-  vocab_size = 10  # MNIST has 10 classes
-
-  # Initialize dt bias based on dt_min and dt_max
-  dt_init_std = dt_rank**-0.5
-  dt_init_floor = 1e-4
-  dt = jnp.exp(random.uniform(jax.random.PRNGKey(6), (expand * d_model,), minval=jnp.log(dt_min), maxval=jnp.log(dt_max))).clip(min=dt_init_floor)
-  inv_dt = dt + jnp.log(-jnp.expm1(-dt))
-
-  # Create parameter dictionary
-  params = {
-      "residual_blocks": [
-          {
-              "mamba_params": [
-                  random.normal(rng, (d_model, 2 * expand * d_model)),
-                  jnp.zeros(2 * expand * d_model),
-                  random.normal(rng, (expand * d_model, 1, d_conv)),
-                  jnp.zeros(expand * d_model),
-                  random.normal(rng, (expand * d_model, dt_rank + 2 * d_state)),
-                  random.normal(rng, (dt_rank, expand * d_model)),
-                  inv_dt,  # Initialized based on dt_min/dt_max
-                  jnp.log(jnp.arange(1, d_state + 1, dtype=jnp.float32)),
-                  jnp.ones(expand * d_model),
-                  random.normal(rng, (expand * d_model, d_model)),
-                  jnp.zeros(d_model),
-              ],
-              "norm_weight": jnp.ones(d_model),
-              "norm_bias": jnp.zeros(d_model),
-          },
-      ],
-      "output_weight": random.normal(rng, (d_model, 10)),
-      "output_bias": jnp.zeros(10),
-  }
-
-  # Data stream function
-  def data_stream():
+    # Set random seed
     rng = random.PRNGKey(0)
-    while True:
-      perm = random.permutation(rng, num_train)
-      for i in range(num_train // batch_size):
-        batch_idx = perm[i * batch_size:(i + 1) * batch_size]
-        yield train_images[batch_idx], train_labels[batch_idx]
 
-  # Optimizer setup
-  opt_init, opt_update, get_params = optimizers.momentum(step_size, mass=momentum_mass)
+    # Hyperparameters (adjust as needed)
+    step_size = 0.001
+    num_epochs = 10
+    batch_size = 128
+    momentum_mass = 0.9
 
-  # Update function
-  @jit
-  def update(i, opt_state, batch):
-    params = get_params(opt_state)
-    return opt_update(i, grad(cross_entropy_loss)(params, batch), opt_state)
+    # Load MNIST dataset
+    train_images, train_labels, test_images, test_labels = mnist()
+    num_train = train_images.shape[0]
 
-  # Initialize optimizer state
-  opt_state = opt_init(params)
+    # Estimated parameter values (adjust based on your model configuration)
+    d_model = 64  # hidden dimension
+    d_state = 16  # state dimension
+    d_conv = 4  # convolution kernel size
+    expand = 2  # expansion factor
+    dt_rank = 160  # delta rank
+    dt_min = 0.001  # minimum delta value
+    dt_max = 0.1  # maximum delta value
+    vocab_size = 10  # MNIST has 10 classes
 
-  # Training loop
-  for epoch in range(num_epochs):
-    for batch in data_stream():
-      opt_state = update(0, opt_state, batch)  # Assuming no gradient accumulation
+    # Initialize dt bias based on dt_min and dt_max
+    dt_init_std = dt_rank**-0.5
+    dt_init_floor = 1e-4
+    dt = jnp.exp(
+        random.uniform(
+            jax.random.PRNGKey(6),
+            (expand * d_model,),
+            minval=jnp.log(dt_min),
+            maxval=jnp.log(dt_max),
+        )
+    ).clip(min=dt_init_floor)
+    inv_dt = dt + jnp.log(-jnp.expm1(-dt))
 
-    # Evaluate accuracy on train and test sets
-    train_acc = accuracy(get_params(opt_state), (train_images, train_labels))
-    test_acc = accuracy(get_params(opt_state), (test_images, test_labels))
-    print(f"Epoch {epoch} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
+    # Create parameter dictionary
+    params = {
+        "residual_blocks": [
+            {
+                "mamba_params": [
+                    random.normal(rng, (d_model, 2 * expand * d_model)),
+                    jnp.zeros(2 * expand * d_model),
+                    random.normal(rng, (expand * d_model, 1, d_conv)),
+                    jnp.zeros(expand * d_model),
+                    random.normal(rng, (expand * d_model, dt_rank + 2 * d_state)),
+                    random.normal(rng, (dt_rank, expand * d_model)),
+                    inv_dt,  # Initialized based on dt_min/dt_max
+                    jnp.log(jnp.arange(1, d_state + 1, dtype=jnp.float32)),
+                    jnp.ones(expand * d_model),
+                    random.normal(rng, (expand * d_model, d_model)),
+                    jnp.zeros(d_model),
+                ],
+                "norm_weight": jnp.ones(d_model),
+                "norm_bias": jnp.zeros(d_model),
+            },
+        ],
+        "output_weight": random.normal(rng, (d_model, 10)),
+        "output_bias": jnp.zeros(10),
+    }
+
+    # Data stream function
+    def data_stream():
+        rng = random.PRNGKey(0)
+        while True:
+            perm = random.permutation(rng, num_train)
+            for i in range(num_train // batch_size):
+                batch_idx = perm[i * batch_size : (i + 1) * batch_size]
+                yield train_images[batch_idx], train_labels[batch_idx]
+
+    # Optimizer setup
+    opt_init, opt_update, get_params = optimizers.momentum(
+        step_size, mass=momentum_mass
+    )
+
+    # Update function
+    @jit
+    def update(i, opt_state, batch):
+        params = get_params(opt_state)
+        return opt_update(i, grad(cross_entropy_loss)(params, batch), opt_state)
+
+    # Initialize optimizer state
+    opt_state = opt_init(params)
+
+    # Training loop
+    for epoch in range(num_epochs):
+        for batch in data_stream():
+            opt_state = update(0, opt_state, batch)  # Assuming no gradient accumulation
+
+        # Evaluate accuracy on train and test sets
+        train_acc = accuracy(get_params(opt_state), (train_images, train_labels))
+        test_acc = accuracy(get_params(opt_state), (test_images, test_labels))
+        print(f"Epoch {epoch} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
