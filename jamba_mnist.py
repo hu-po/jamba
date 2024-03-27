@@ -70,10 +70,10 @@ def mnist_raw():
     ]:
         _download(base_url + filename, filename)
 
-    train_images = parse_images(path.join(_DATA, "train-images-idx3-ubyte.gz"))
-    train_labels = parse_labels(path.join(_DATA, "train-labels-idx1-ubyte.gz"))
-    test_images = parse_images(path.join(_DATA, "t10k-images-idx3-ubyte.gz"))
-    test_labels = parse_labels(path.join(_DATA, "t10k-labels-idx1-ubyte.gz"))
+    train_images = parse_images(path.join(DATA_DIR, "train-images-idx3-ubyte.gz"))
+    train_labels = parse_labels(path.join(DATA_DIR, "train-labels-idx1-ubyte.gz"))
+    test_images = parse_images(path.join(DATA_DIR, "t10k-images-idx3-ubyte.gz"))
+    test_labels = parse_labels(path.join(DATA_DIR, "t10k-labels-idx1-ubyte.gz"))
 
     return train_images, train_labels, test_images, test_labels
 
