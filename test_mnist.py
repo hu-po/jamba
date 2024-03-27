@@ -28,7 +28,7 @@ import urllib.request
 import numpy as np
 
 
-_DATA = "/tmp/jax_example_data/"
+DATA_DIR = "/data/mnist"
 
 def check_gpu():
   print("jax.devices:", jax.devices())
@@ -42,12 +42,12 @@ def check_gpu():
 
 def _download(url, filename):
   """Download a url to a file in the JAX data temp directory."""
-  if not path.exists(_DATA):
-    os.makedirs(_DATA)
-  out_file = path.join(_DATA, filename)
+  if not path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+  out_file = path.join(DATA_DIR, filename)
   if not path.isfile(out_file):
     urllib.request.urlretrieve(url, out_file)
-    print(f"downloaded {url} to {_DATA}")
+    print(f"downloaded {url} to {DATA_DIR}")
 
 
 def _partial_flatten(x):
