@@ -25,6 +25,7 @@ import itertools
 
 import numpy.random as npr
 
+import jax
 import jax.numpy as jnp
 from jax import jit, grad, random
 from jax.example_libraries import optimizers
@@ -42,6 +43,15 @@ import numpy as np
 
 
 _DATA = "/tmp/jax_example_data/"
+
+def check_gpu():
+  print("jax.devices:", jax.devices())
+  print("jax.default_backend():", jax.default_backend())
+  try:
+      _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
+      return True
+  except:
+      return False
 
 
 def _download(url, filename):
@@ -126,6 +136,7 @@ init_random_params, predict = stax.serial(
     Dense(10), LogSoftmax)
 
 if __name__ == "__main__":
+  check_gpu()
   rng = random.key(0)
 
   step_size = 0.001
