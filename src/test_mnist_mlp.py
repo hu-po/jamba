@@ -4,18 +4,15 @@ The mini-library jax.example_libraries.stax is for neural network building, and
 the mini-library jax.example_libraries.optimizers is for first-order stochastic
 optimization.
 """
-
-
 import time
 import itertools
-
-import numpy.random as npr
 
 import jax.numpy as jnp
 from jax import jit, grad, random
 from jax.example_libraries import optimizers
 from jax.example_libraries import stax
 from jax.example_libraries.stax import Dense, Relu, LogSoftmax
+import numpy.random as npr
 
 from utils import check_gpu
 from mnist import mnist

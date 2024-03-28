@@ -12,4 +12,4 @@ RUN mkdir /logs
 RUN mkdir /src
 WORKDIR /src
 COPY src/* /src/
-CMD ["python", "test_mnist.py"]
+CMD ["python", "test_mnist_mlp.py"]
