@@ -14,69 +14,76 @@ from mnist import mnist
 
 
 parser = argparse.ArgumentParser()
+# training
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--run_name", type=str, default="test1")
-
 parser.add_argument("--num_epochs", type=int, default=10)
 parser.add_argument("--batch_size", type=int, default=32)
-parser.add_argument("--learning_rate", type=float, default=0.001)
-parser.add_argument("--momentum", type=float, default=0.9)
 
+# directories and paths
+parser.add_argument("--run_name", type=str, default="test1")
 parser.add_argument("--data_dir", type=str, default="/home/oop/dev/data/mnist")
 parser.add_argument("--ckpt_dir", type=str, default="/ckpt")
 parser.add_argument("--save_ckpt", type=bool, default=False)
 parser.add_argument("--logs_dir", type=str, default="/logs")
 
+# learning rate and betas from paper Section dim_e.2
+parser.add_argument("--learning_rate", type=float, default=1e-3)
+parser.add_argument("--b1", type=float, default=0.9)
+parser.add_argument("--b2", type=float, default=0.95)
+
 # Mamba model hyperparameters
-parser.add_argument("--num_blocks", type=int, default=1)  # number of mamba blocks
-parser.add_argument("--mod_dim_D", type=int, default=64)  # Model Dimension D
-parser.add_argument("--exp_fac_E", type=int, default=2)  # Expansion Factor E
-
-parser.add_argument("--d_state", type=int, default=16)  # state dimension
-parser.add_argument("--d_conv", type=int, default=4)  # convolution kernel size
-parser.add_argument("--dt_rank", type=int, default=160)  # delta rank
-parser.add_argument("--dt_min", type=int, default=0.001)  # minimum delta value
-parser.add_argument("--dt_max", type=int, default=0.1)  # maximum delta value
+parser.add_argument("--num_blocks", type=int, default=2)  # number of mamba blocks
+parser.add_argument("--dim_c", type=int, default=1)  # dimmension of channels (each input "token")
+parser.add_argument("--dim_h", type=int, default=1)  # dimmension of hidden state h
+parser.add_argument("--dim_e", type=int, default=2)  # expansion factor
+parser.add_argument("--dim_Δ", type=int, default=1)  # dimmension of Δ
+parser.add_argument("--dim_conv", type=int, default=4)  # convolution kernel size
 
 
-def selective_scan(
-    input_sequence,
-    delta,
-    state_transition_matrix,
-    input_matrix,
-    output_matrix,
-    skip_matrix,
-):
+def selective_scan(x,Δ,A,B,C):
 
     def scan_func(state, inputs):
-        current_input, delta, input_matrix, output_matrix = inputs
-        updated_state = (
-            jnp.exp(delta @ state_transition_matrix) * state
-            + delta @ input_matrix * current_input
-        )
-        output = updated_state @ output_matrix
-        return updated_state, output
+        _x, _Δ, _B, _C = inputs
+        _x = jnp.exp(_Δ @ A) * state + _Δ @ _B * _x
+        _y = _x @ _C
+        return _x, _y
 
-    initial_state = jnp.zeros_like(input_sequence[:, :, :1])
-    _, outputs = lax.scan(
-        scan_func, initial_state, (input_sequence, delta, input_matrix, output_matrix)
-    )
-    return outputs + input_sequence * skip_matrix
+    initial_state = jnp.zeros_like(x[:, :, :1])
+    _, outputs = lax.scan(scan_func, initial_state, (x, Δ, B, C))
+    return outputs
 
 
 def mamba_block(x, params):
-    # input sequence x with shape [B, L, D]
-    # B is batch size, L is sequence length, D is token dimension
+    # input sequence x with shape [B, L, dim_c]
+    # B is batch size
+    # L is sequence length
+    # dim_c is number of channels per input token
+    # dim_e is an expansion factor
 
-    # project input x to Δ, B, C
+    # project input x to hidden dimmension
+    # (B, L, dim_c) @ (dim_c, dim_h) -> (B, L, dim_h)
     x = x @ params['in_proj_w'] + params['in_proj_b']
 
-    # split projected input x into two branches
-    x1, x2 = jnp.split(x, 2, axis=-1)
+    # skip connection comes out
+    x_skip = jax.nn.silu(x)
 
-    # branch 1 goes to conv, silu, scan
-    x1 = jax.lax.conv_general_dilated(
-        x1,
+    # project input sequence x to B (input matrix)
+    # (B, L, dim_h) @ (dim_h, dim_h*dim_e) -> (B, L, dim_h*dim_e)
+    B = x @ params['B_proj_w']
+
+    # project input sequence x to C (output matrix)
+    # (B, L, dim_c) @ (dim_c, dim_c*dim_e) -> (B, L, dim_c*dim_e)
+    C = x @ params['C_proj_w']
+
+    # project input x to Δ
+    # (B, L, dim_c) @ (dim_c, dim_Δ) -> (B, L, dim_Δ)
+    Δ = x @ params['Δ_proj_w']
+    # broadcast Δ to shape (B, L, dim_c*dim_e)
+    Δ = jnp.broadcast_to(Δ, (Δ.shape[0], Δ.shape[1], params['B_proj_w'].shape[1]))
+
+    # causal 1D convolution layer
+    x = jax.lax.conv_general_dilated(
+        x,
         params['conv_w'],
         window_strides=(1,),
         # Padding for causality: only pad the left side of the sequence
@@ -87,19 +94,16 @@ def mamba_block(x, params):
         dimension_numbers=('NWC', 'WIO', 'NWC'),  # specify data format: batch, spatial, channel
         feature_group_count=1,  # for grouped (channel-wise) convolution, set >1
     ) + params['conv_b']
-    x1 = jax.nn.silu(x1)
-    x1 = selective_scan()
+    x = jax.nn.silu(x)
+    x = selective_scan(x,Δ,params['A'],B,C)
 
-    # branch2 goes to silu
-    x2 = jax.nn.silu(x2)
-
-    # merge branch 1 and branch 2
-    x = x1 * x2
+    # skip connection goes back in
+    x = x * x_skip
 
     # project merged x to output y
     y = x @ params['out_proj_w'] + params['out_proj_b']
 
-    # output sequence y with shape [B, L, D]
+    # output sequence y with shape [B, L, dim_c]
     return y
 
 def rms_norm(x, weight, bias, eps=1e-6):
@@ -161,7 +165,7 @@ if __name__ == "__main__":
     dt = jnp.exp(
         random.uniform(
             jax.random.PRNGKey(6),
-            (args.exp_fac_E * args.mod_dim_D,),
+            (args.dim_e * args.dim_c,),
             minval=jnp.log(args.dt_min),
             maxval=jnp.log(args.dt_max),
         )
@@ -171,39 +175,37 @@ if __name__ == "__main__":
         "residual_blocks": [
             {
                 "mamba_params": {
-                    # input linear projection layer
-                    "in_proj_w" : random.normal(rng, (args.mod_dim_D, 2 * args.exp_fac_E * args.mod_dim_D)),
-                    "in_proj_b" : jnp.zeros(2 * args.exp_fac_E * args.mod_dim_D),
+                    # input projection
+                    "in_proj_w": random.normal(rng, (args.dim_c, args.dim_h)),
+                    "in_proj_b": jnp.zeros(args.dim_h),
+
+                    # SSM parameters
+                    "B_proj_w" : random.normal(rng, (args.dim_h, args.dim_e * args.dim_h)),
+                    "C_proj_w" : random.normal(rng, (args.dim_h, args.dim_e * args.dim_h)),
+                    "Δ_proj_w" : random.normal(rng, (args.dim_h, args.dim_Δ)),
+                    "A" : jnp.eye(args.dim_e * args.dim_h) + jnp.tril(jnp.ones((args.dim_e * args.dim_h, args.dim_e * args.dim_h))),
 
                     # causal 1D convolution layer
-                    "conv_w" : random.normal(rng, (args.d_conv, args.exp_fac_E * args.mod_dim_D, 1)),
-                    "conv_b" : jnp.zeros(1),
+                    "conv_w" : random.normal(rng, (args.d_conv, args.dim_e * args.dim_h, 1)),
 
-                    "x_proj_weight" : random.normal(rng, (args.exp_fac_E * args.mod_dim_D, args.dt_rank + 2 * args.d_state)),  # x_proj_weight
-                    "dt_proj_weight" : random.normal(rng, (args.exp_fac_E * args.mod_dim_D, args.dt_rank)),  # dt_proj_weight
-                    "dt_proj_bias" : jnp.log(dt),  # dt_proj_bias (initialized based on dt_min/dt_max)
-                    "state_transition_matrix_log" : random.normal(rng, (args.d_state, args.d_state)),  # state_transition_matrix_log
-                    "skip_matrix" : jnp.ones(args.exp_fac_E * args.mod_dim_D),  # skip_matrix
-                    
-                    # output linear projection layer
-                    "out_proj_w" : random.normal(rng, (args.d_state, args.exp_fac_E * args.mod_dim_D)),
-                    "out_proj_b" : jnp.zeros(args.exp_fac_E * args.mod_dim_D),
+                    # output projection
+                    "out_proj_w": random.normal(rng, (args.dim_h, args.dim_c)),
+                    "out_proj_b": jnp.zeros(args.dim_c),
+
                 },
                 # RMS normalization layer
-                "norm_w": jnp.ones(args.exp_fac_E * args.mod_dim_D),
-                "norm_b": jnp.zeros(args.exp_fac_E * args.mod_dim_D),
+                "norm_w": jnp.ones(args.dim_c),
+                "norm_b": jnp.zeros(args.dim_c),
             }
             for _ in range(args.num_blocks)
         ],
         # classification head
-        "class_head_w": random.normal(rng, (args.exp_fac_E * args.mod_dim_D, 10)),
+        "class_head_w": random.normal(rng, (args.dim_c, 10)),
         "class_head_b": jnp.zeros(10),
     }
 
     # Optimizer
-    opt_init, opt_update, get_params = optimizers.momentum(
-        args.learning_rate, mass=args.momentum
-    )
+    opt_init, opt_update, get_params = optimizers.adam(args.learning_rate, args.b1, args.b2)
 
     @jit
     def update(i, opt_state, batch):
