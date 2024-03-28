@@ -6,7 +6,10 @@ RUN pip install \
     "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html \
     jaxlib \
     flax
+RUN mkdir /data
+RUN mkdir /ckpt
+RUN mkdir /logs
 RUN mkdir /src
 WORKDIR /src
-COPY test_mnist.py /src/test_mnist.py
+COPY src/* /src/
 CMD ["python", "test_mnist.py"]

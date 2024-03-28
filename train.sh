@@ -10,5 +10,5 @@ docker run \
     -v ${DATA_PATH}:/data \
     -v ${CKPT_PATH}:/ckpt \
     -v ${LOGS_PATH}:/logs \
-    -e RUN_NAME=test \
+    -e RUN_NAME=start \
     jamba

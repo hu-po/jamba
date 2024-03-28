@@ -1,9 +1,4 @@
-import array
-import gzip
-import os
-from os import path
-import struct
-import urllib.request
+import argparse
 
 import jax
 import jax.lax as lax
@@ -11,88 +6,43 @@ import jax.numpy as jnp
 from jax import jit, grad, random
 from jax.example_libraries import optimizers
 
-import numpy as np
+from utils import check_gpu
+from mnist import mnist
 
-DATA_DIR = "/data/mnist"
+parser = argparse.ArgumentParser()
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--run_name", type=str, default="test1")
+parser.add_argument("--num_epochs", type=int, default=24)
 
-def check_gpu():
-  print("jax.devices:", jax.devices())
-  print("jax.default_backend():", jax.default_backend())
-  try:
-      _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
-      return True
-  except:
-      return False
-
-
-def _download(url, filename):
-  """Download a url to a file in the JAX data temp directory."""
-  if not path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-  out_file = path.join(DATA_DIR, filename)
-  if not path.isfile(out_file):
-    urllib.request.urlretrieve(url, out_file)
-    print(f"downloaded {url} to {DATA_DIR}")
+parser.add_argument("--round", type=int, default=0)
+parser.add_argument("--early_stop", type=int, default=6)
+parser.add_argument("--max_model_size", type=int, default=1e8)
+parser.add_argument("--batch_size", type=int, default=16)
+parser.add_argument("--learning_rate", type=float, default=0.01)
+parser.add_argument("--learning_rate_gamma", type=float, default=0.9)
+parser.add_argument("--train_data_dir", type=str, default="/data/train")
+parser.add_argument("--test_data_dir", type=str, default="/data/test")
+parser.add_argument("--ckpt_dir", type=str, default="/ckpt")
+parser.add_argument("--save_ckpt", type=bool, default=False)
+parser.add_argument("--logs_dir", type=str, default="/logs")
+args = parser.parse_args()
 
 
-def _partial_flatten(x):
-    """Flatten all but the first dimension of an ndarray."""
-    return np.reshape(x, (x.shape[0], -1))
+# Hyperparameters (adjust as needed)
+step_size = 0.001
+num_epochs = 10
+batch_size = 128
+momentum_mass = 0.9
 
-
-def _one_hot(x, k, dtype=np.float32):
-    """Create a one-hot encoding of x of size k."""
-    return np.array(x[:, None] == np.arange(k), dtype)
-
-
-def mnist_raw():
-    """Download and parse the raw MNIST dataset."""
-    # CVDF mirror of http://yann.lecun.com/exdb/mnist/
-    base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
-
-    def parse_labels(filename):
-        with gzip.open(filename, "rb") as fh:
-            _ = struct.unpack(">II", fh.read(8))
-            return np.array(array.array("B", fh.read()), dtype=np.uint8)
-
-    def parse_images(filename):
-        with gzip.open(filename, "rb") as fh:
-            _, num_data, rows, cols = struct.unpack(">IIII", fh.read(16))
-            return np.array(array.array("B", fh.read()), dtype=np.uint8).reshape(
-                num_data, rows, cols
-            )
-
-    for filename in [
-        "train-images-idx3-ubyte.gz",
-        "train-labels-idx1-ubyte.gz",
-        "t10k-images-idx3-ubyte.gz",
-        "t10k-labels-idx1-ubyte.gz",
-    ]:
-        _download(base_url + filename, filename)
-
-    train_images = parse_images(path.join(DATA_DIR, "train-images-idx3-ubyte.gz"))
-    train_labels = parse_labels(path.join(DATA_DIR, "train-labels-idx1-ubyte.gz"))
-    test_images = parse_images(path.join(DATA_DIR, "t10k-images-idx3-ubyte.gz"))
-    test_labels = parse_labels(path.join(DATA_DIR, "t10k-labels-idx1-ubyte.gz"))
-
-    return train_images, train_labels, test_images, test_labels
-
-
-def mnist(permute_train=False):
-    """Download, parse and process MNIST data to unit scale and one-hot labels."""
-    train_images, train_labels, test_images, test_labels = mnist_raw()
-
-    train_images = _partial_flatten(train_images) / np.float32(255.0)
-    test_images = _partial_flatten(test_images) / np.float32(255.0)
-    train_labels = _one_hot(train_labels, 10)
-    test_labels = _one_hot(test_labels, 10)
-
-    if permute_train:
-        perm = np.random.RandomState(0).permutation(train_images.shape[0])
-        train_images = train_images[perm]
-        train_labels = train_labels[perm]
-
-    return train_images, train_labels, test_images, test_labels
+# Estimated parameter values (adjust based on your model configuration)
+d_model = 64  # hidden dimension
+d_state = 16  # state dimension
+d_conv = 4  # convolution kernel size
+expand = 2  # expansion factor
+dt_rank = 160  # delta rank
+dt_min = 0.001  # minimum delta value
+dt_max = 0.1  # maximum delta value
+vocab_size = 10  # MNIST has 10 classes
 
 
 def linear(x, weight, bias):
@@ -208,28 +158,12 @@ def model(images, params):
 
 
 if __name__ == "__main__":
-    # Set random seed
-    rng = random.PRNGKey(0)
-
-    # Hyperparameters (adjust as needed)
-    step_size = 0.001
-    num_epochs = 10
-    batch_size = 128
-    momentum_mass = 0.9
+    check_gpu()
+    rng = random.key(args.seed)
 
     # Load MNIST dataset
     train_images, train_labels, test_images, test_labels = mnist()
     num_train = train_images.shape[0]
-
-    # Estimated parameter values (adjust based on your model configuration)
-    d_model = 64  # hidden dimension
-    d_state = 16  # state dimension
-    d_conv = 4  # convolution kernel size
-    expand = 2  # expansion factor
-    dt_rank = 160  # delta rank
-    dt_min = 0.001  # minimum delta value
-    dt_max = 0.1  # maximum delta value
-    vocab_size = 10  # MNIST has 10 classes
 
     # Initialize dt bias based on dt_min and dt_max
     dt_init_std = dt_rank**-0.5

@@ -11,5 +11,5 @@ RUN mkdir /ckpt
 RUN mkdir /logs
 RUN mkdir /src
 WORKDIR /src
-COPY jamba_mnist.py /src/jamba_mnist.py
+COPY src/* /src/
 CMD ["python", "jamba_mnist.py"]
