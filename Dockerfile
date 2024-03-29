@@ -5,7 +5,7 @@ RUN pip install --upgrade pip
 RUN pip install \
     "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html \
     jaxlib \
-    flax
+    matplotlib
 RUN mkdir /data
 RUN mkdir /ckpt
 RUN mkdir /logs

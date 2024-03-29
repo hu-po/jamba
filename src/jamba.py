@@ -7,7 +7,9 @@ import jax.lax as lax
 import jax.numpy as jnp
 from jax import jit, grad, random
 from jax.example_libraries import optimizers
+import matplotlib.pyplot as plt
 import numpy.random as npr
+
 
 from utils import check_gpu
 from mnist import mnist
@@ -21,7 +23,7 @@ parser.add_argument("--batch_size", type=int, default=32)
 
 # directories and paths
 parser.add_argument("--run_name", type=str, default="test1")
-parser.add_argument("--data_dir", type=str, default="/home/oop/dev/data/mnist")
+parser.add_argument("--data_dir", type=str, default="/data")
 parser.add_argument("--ckpt_dir", type=str, default="/ckpt")
 parser.add_argument("--save_ckpt", type=bool, default=False)
 parser.add_argument("--logs_dir", type=str, default="/logs")
@@ -82,6 +84,7 @@ def mamba_block(x, params):
     # input sequence x with shape [B, L, dim_c]
     # B is batch size
     # L is sequence length
+    # TODO: layer normalization on input x
     # project input x to hidden dimmension
     # (B, L, dim_c) @ (dim_c, dim_h) -> (B, L, dim_h)
     x = x @ params["in_proj_w"] + params["in_proj_b"]
@@ -112,6 +115,7 @@ def mamba_block(x, params):
     # initial hidden state h [B, dim_h]
     h_0 = jnp.broadcast_to(params["h_0"], (x.shape[0], params["h_0"].shape[0]))
     x = selective_scan(x, Δ, params["A"], B, C, h_0)
+    # TODO: layer normalization after selective scan
     # skip connection goes back in
     # (B, L, dim_h) * (B, L, dim_h) -> (B, L, dim_h)
     x = x * x_skip
@@ -236,6 +240,8 @@ if __name__ == "__main__":
     itercount = itertools.count()
 
     print("\nStarting training...")
+    train_acc_history = []
+    test_acc_history = []
     for epoch in range(args.num_epochs):
         start_time = time.time()
         for batch_idx in range(num_batches):
@@ -246,6 +252,17 @@ if __name__ == "__main__":
         params = get_params(opt_state)
         train_acc = accuracy(params, (train_images, train_labels))
         test_acc = accuracy(params, (test_images, test_labels))
+        train_acc_history.append(train_acc)
+        test_acc_history.append(test_acc)
         print(f"Epoch {epoch} in {epoch_time:0.2f} sec")
         print(f"Training set accuracy {train_acc}")
         print(f"Test set accuracy {test_acc}")
+
+    plt.plot(range(args.num_epochs), train_acc_history, label='train')
+    plt.plot(range(args.num_epochs), test_acc_history, label='test')
+    plt.xlabel('epoch')
+    plt.ylabel('accuracy')
+    plt.legend()
+
+    # Saving the plot to a PNG file
+    plt.savefig(f"{args.log_dir}/plot.{args.run_name}.png")

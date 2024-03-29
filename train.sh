@@ -1,6 +1,6 @@
 export DATA_PATH="/home/oop/dev/data"
-export CKPT_PATH="/home/oop/dev/data/jamba/ckpt"
-export LOGS_PATH="/home/oop/dev/data/jamba/logs"
+export CKPT_PATH="/home/oop/dev/mambas/jamba/ckpt"
+export LOGS_PATH="/home/oop/dev/mambas/jamba/logs"
 docker build -t jamba -f Dockerfile .
 docker run \
     -it \
