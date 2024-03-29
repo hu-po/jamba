@@ -33,7 +33,6 @@ parser.add_argument("--b2", type=float, default=0.95)
 
 # Mamba model hyperparameters
 parser.add_argument("--num_blocks", type=int, default=2)  # number of mamba blocks
-parser.add_argument("--dim_c", type=int, default=1)  # dimmension of channels
 parser.add_argument("--dim_h", type=int, default=4)  # dimmension of hidden state h
 parser.add_argument("--dim_Δ", type=int, default=1)  # dimmension of Δ
 parser.add_argument("--dim_conv", type=int, default=4)  # convolution kernel size
@@ -137,6 +136,8 @@ def model(x, params):
         y = rms_norm(y, block_params["norm_w"], block_params["norm_b"])
         # skip connection
         x += y
+    # remove channel dimmension
+    x = jnp.squeeze(x, axis=-1)
     # classification head
     logits = x @ params["class_head_w"] + params["class_head_b"]
     return logits
@@ -166,6 +167,9 @@ if __name__ == "__main__":
     num_train = train_images.shape[0]
     num_complete_batches, leftover = divmod(num_train, args.batch_size)
     num_batches = num_complete_batches + bool(leftover)
+    num_classes = 10
+    dim_c = 1
+    dim_seq = 28 * 28
 
     def data_stream():
         rng = npr.RandomState(0)
@@ -184,7 +188,7 @@ if __name__ == "__main__":
             {
                 "mamba_params": {
                     # input projection
-                    "in_proj_w": random.normal(rng, (args.dim_c, args.dim_h)),
+                    "in_proj_w": random.normal(rng, (dim_c, args.dim_h)),
                     "in_proj_b": jnp.zeros(args.dim_h),
                     # SSM parameters
                     "B_proj_w": random.normal(rng, (args.dim_h, args.dim_h)),
@@ -203,18 +207,18 @@ if __name__ == "__main__":
                     # initial hidden state h_0
                     "h_0": random.normal(rng, (args.dim_h,)),
                     # output projection
-                    "out_proj_w": random.normal(rng, (args.dim_h, args.dim_c)),
-                    "out_proj_b": jnp.zeros(args.dim_c),
+                    "out_proj_w": random.normal(rng, (args.dim_h, dim_c)),
+                    "out_proj_b": jnp.zeros(dim_c),
                 },
                 # RMS normalization layer
-                "norm_w": jnp.ones(args.dim_c),
-                "norm_b": jnp.zeros(args.dim_c),
+                "norm_w": jnp.ones(dim_c),
+                "norm_b": jnp.zeros(dim_c),
             }
             for _ in range(args.num_blocks)
         ],
         # classification head
-        "class_head_w": random.normal(rng, (args.dim_c, 10)),
-        "class_head_b": jnp.zeros(10),
+        "class_head_w": random.normal(rng, (dim_seq, num_classes)),
+        "class_head_b": jnp.zeros(num_classes),
     }
 
     # Optimizer
