@@ -33,24 +33,41 @@ parser.add_argument("--b2", type=float, default=0.95)
 
 # Mamba model hyperparameters
 parser.add_argument("--num_blocks", type=int, default=2)  # number of mamba blocks
-parser.add_argument(
-    "--dim_c", type=int, default=1
-)  # dimmension of channels (each input "token")
+parser.add_argument("--dim_c", type=int, default=1)  # dimmension of channels
 parser.add_argument("--dim_h", type=int, default=4)  # dimmension of hidden state h
 parser.add_argument("--dim_Δ", type=int, default=1)  # dimmension of Δ
 parser.add_argument("--dim_conv", type=int, default=4)  # convolution kernel size
 
 
-def selective_scan(x, Δ, A, B, C):
+def selective_scan(x, Δ, A, B, C, h_0):
 
-    def scan_func(state, inputs):
+    def _scan(h_tm1, inputs):
+        # inputs are slices of x, Δ, B, C on leading axis
         _x, _Δ, _B, _C = inputs
-        _x = jnp.exp(_Δ @ A) * state + _Δ @ _B * _x
-        _y = _x @ _C
-        return _x, _y
+        # Equations 2a, 2b and 4 from paper
+        h_t = (
+            jnp.exp(_Δ*A) * h_tm1
+            + (
+                jnp.linalg.inv(_Δ*A)
+                @ (jnp.exp(_Δ*A) - jnp.eye(A.shape[0]))
+                * (_Δ*_B)
+            )
+            * _x
+        )
+        _y = _C @ h_t
+        return h_t, _y
 
-    initial_state = jnp.zeros_like(x[:, :, :1])
-    _, outputs = lax.scan(scan_func, initial_state, (x, Δ, B, C))
+    # reshape x, Δ, B, C to [L, B, dim_h]
+    x = jnp.moveaxis(x, 0, -1)
+    Δ = jnp.moveaxis(Δ, 0, -1)
+    B = jnp.moveaxis(B, 0, -1)
+    C = jnp.moveaxis(C, 0, -1)
+    # forward scan
+    _, out1 = lax.scan(_scan, h_0, (x, Δ, B, C))
+    # backward scan
+    _, out2 = lax.scan(_scan, h_0, (x, Δ, B, C), reverse=True)
+    # merge forward and backward scan outputs
+    outputs = out1 + out2
     return outputs
 
 
@@ -73,29 +90,28 @@ def mamba_block(x, params):
     # (B, L, dim_h) @ (dim_h, dim_Δ) -> (B, L, dim_Δ)
     Δ = x @ params["Δ_proj_w"]
     # broadcast Δ to shape (B, L, dim_h)
-    Δ = jnp.broadcast_to(Δ[:, :, None], (Δ.shape[0], Δ.shape[1], params["A"].shape[1]))
+    # Δ = jnp.broadcast_to(Δ[:, :, None], (Δ.shape[0], Δ.shape[1], params["A"].shape[1]))
     # causal 1D convolution layer
-    x = (
-        jax.lax.conv_general_dilated(
-            x,
-            params["conv_w"],
-            window_strides=(1,),
-            # Padding for causality: only pad the left side of the sequence
-            # (left_pad, right_pad) for each spatial dimension
-            padding=[(params["conv_w"].shape[0] - 1, 0)],
-            lhs_dilation=(1,),
-            rhs_dilation=(1,),
-            dimension_numbers=(
-                "NWC",
-                "WIO",
-                "NWC",
-            ),  # specify data format: batch, spatial, channel
-            feature_group_count=1,  # for grouped (channel-wise) convolution, set >1
-        )
-        + params["conv_b"]
+    x = jax.lax.conv_general_dilated(
+        x,
+        params["conv_w"],
+        window_strides=(1,),
+        # Padding for causality: only pad the left side of the sequence
+        # (left_pad, right_pad) for each spatial dimension
+        padding=[(params["conv_w"].shape[0] - 1, 0)],
+        lhs_dilation=(1,),
+        rhs_dilation=(1,),
+        dimension_numbers=(
+            "NWC",
+            "WIO",
+            "NWC",
+        ),  # specify data format: batch, spatial, channel
+        feature_group_count=1,  # for grouped (channel-wise) convolution, set >1
     )
     x = jax.nn.silu(x)
-    x = selective_scan(x, Δ, params["A"], B, C)
+    # initial hidden state h [B, dim_h]
+    h_0 = jnp.broadcast_to(params["h_0"], (x.shape[0], params["h_0"].shape[0]))
+    x = selective_scan(x, Δ, params["A"], B, C, h_0)
     # skip connection goes back in
     # (B, L, dim_h) * (B, L, dim_h) -> (B, L, dim_h)
     x = x * x_skip
@@ -172,10 +188,15 @@ if __name__ == "__main__":
                     # SSM parameters
                     "B_proj_w": random.normal(rng, (args.dim_h, args.dim_h)),
                     "C_proj_w": random.normal(rng, (args.dim_h, args.dim_h)),
-                    "Δ_proj_w": random.normal(rng, (args.dim_h, args.dim_Δ)),
-                    "A": jnp.eye(args.dim_h) + jnp.tril(jnp.ones((args.dim_h, args.dim_h)), -1),
+                    # Initialization for Δ from paper in Section 3.6
+                    "Δ_proj_w": random.uniform(rng, (args.dim_h, args.dim_Δ), minval=0.001, maxval=0.1),
+                    # Initialization for A from paper in Section 3.6 and Table 8
+                    "A": jnp.eye(args.dim_h)
+                    + jnp.tril(jnp.ones((args.dim_h, args.dim_h)), -1),
                     # causal 1D convolution layer
                     "conv_w": random.normal(rng, (args.dim_conv, args.dim_h, 1)),
+                    # initial hidden state h_0
+                    "h_0": random.normal(rng, (args.dim_h,)),
                     # output projection
                     "out_proj_w": random.normal(rng, (args.dim_h, args.dim_c)),
                     "out_proj_b": jnp.zeros(args.dim_c),
