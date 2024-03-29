@@ -1,4 +1,4 @@
-export DATA_PATH="/home/oop/dev/data/mnist"
+export DATA_PATH="/home/oop/dev/data"
 export CKPT_PATH="/home/oop/dev/data/jamba/ckpt"
 export LOGS_PATH="/home/oop/dev/data/jamba/logs"
 docker build -t jamba -f Dockerfile .

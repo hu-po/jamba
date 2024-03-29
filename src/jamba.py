@@ -153,6 +153,7 @@ def cross_entropy_loss(params, batch):
 def accuracy(params, batch):
     """Computes accuracy for Mamba model on MNIST."""
     images, labels = batch
+    images = jnp.expand_dims(images, axis=-1)
     predicted_labels = jnp.argmax(model(images, params), axis=-1)
     return jnp.mean(predicted_labels == jnp.argmax(labels, axis=-1))
 
@@ -237,8 +238,9 @@ if __name__ == "__main__":
     print("\nStarting training...")
     for epoch in range(args.num_epochs):
         start_time = time.time()
-        for _ in range(num_batches):
+        for batch_idx in range(num_batches):
             opt_state = update(next(itercount), opt_state, next(batches))
+            print(f"Batch {batch_idx+1}/{num_batches}", end="\r")
         epoch_time = time.time() - start_time
 
         params = get_params(opt_state)
