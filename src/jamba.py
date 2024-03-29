@@ -26,21 +26,22 @@ parser.add_argument("--ckpt_dir", type=str, default="/ckpt")
 parser.add_argument("--save_ckpt", type=bool, default=False)
 parser.add_argument("--logs_dir", type=str, default="/logs")
 
-# learning rate and betas from paper Section dim_e.2
+# learning rate and betas from paper Section E.2
 parser.add_argument("--learning_rate", type=float, default=1e-3)
 parser.add_argument("--b1", type=float, default=0.9)
 parser.add_argument("--b2", type=float, default=0.95)
 
 # Mamba model hyperparameters
 parser.add_argument("--num_blocks", type=int, default=2)  # number of mamba blocks
-parser.add_argument("--dim_c", type=int, default=1)  # dimmension of channels (each input "token")
-parser.add_argument("--dim_h", type=int, default=1)  # dimmension of hidden state h
-parser.add_argument("--dim_e", type=int, default=2)  # expansion factor
+parser.add_argument(
+    "--dim_c", type=int, default=1
+)  # dimmension of channels (each input "token")
+parser.add_argument("--dim_h", type=int, default=4)  # dimmension of hidden state h
 parser.add_argument("--dim_Δ", type=int, default=1)  # dimmension of Δ
 parser.add_argument("--dim_conv", type=int, default=4)  # convolution kernel size
 
 
-def selective_scan(x,Δ,A,B,C):
+def selective_scan(x, Δ, A, B, C):
 
     def scan_func(state, inputs):
         _x, _Δ, _B, _C = inputs
@@ -57,54 +58,53 @@ def mamba_block(x, params):
     # input sequence x with shape [B, L, dim_c]
     # B is batch size
     # L is sequence length
-    # dim_c is number of channels per input token
-    # dim_e is an expansion factor
-
     # project input x to hidden dimmension
     # (B, L, dim_c) @ (dim_c, dim_h) -> (B, L, dim_h)
-    x = x @ params['in_proj_w'] + params['in_proj_b']
-
+    x = x @ params["in_proj_w"] + params["in_proj_b"]
     # skip connection comes out
     x_skip = jax.nn.silu(x)
-
     # project input sequence x to B (input matrix)
-    # (B, L, dim_h) @ (dim_h, dim_h*dim_e) -> (B, L, dim_h*dim_e)
-    B = x @ params['B_proj_w']
-
+    # (B, L, dim_h) @ (dim_h, dim_h) -> (B, L, dim_h)
+    B = x @ params["B_proj_w"]
     # project input sequence x to C (output matrix)
-    # (B, L, dim_h) @ (dim_h, dim_h*dim_e) -> (B, L, dim_h*dim_e)
-    C = x @ params['C_proj_w']
-
+    # (B, L, dim_h) @ (dim_h, dim_h) -> (B, L, dim_h)
+    C = x @ params["C_proj_w"]
     # project input x to Δ
     # (B, L, dim_h) @ (dim_h, dim_Δ) -> (B, L, dim_Δ)
-    Δ = x @ params['Δ_proj_w']
-    # broadcast Δ to shape (B, L, dim_h*dim_e)
-    Δ = jnp.broadcast_to(Δ, (Δ.shape[0], Δ.shape[1], params['B_proj_w'].shape[1]))
-
+    Δ = x @ params["Δ_proj_w"]
+    # broadcast Δ to shape (B, L, dim_h)
+    Δ = jnp.broadcast_to(Δ[:, :, None], (Δ.shape[0], Δ.shape[1], params["A"].shape[1]))
     # causal 1D convolution layer
-    x = jax.lax.conv_general_dilated(
-        x,
-        params['conv_w'],
-        window_strides=(1,),
-        # Padding for causality: only pad the left side of the sequence
-        # (left_pad, right_pad) for each spatial dimension
-        padding = [(params['conv_w'].shape[0] - 1, 0)],
-        lhs_dilation=(1,),
-        rhs_dilation=(1,),
-        dimension_numbers=('NWC', 'WIO', 'NWC'),  # specify data format: batch, spatial, channel
-        feature_group_count=1,  # for grouped (channel-wise) convolution, set >1
-    ) + params['conv_b']
+    x = (
+        jax.lax.conv_general_dilated(
+            x,
+            params["conv_w"],
+            window_strides=(1,),
+            # Padding for causality: only pad the left side of the sequence
+            # (left_pad, right_pad) for each spatial dimension
+            padding=[(params["conv_w"].shape[0] - 1, 0)],
+            lhs_dilation=(1,),
+            rhs_dilation=(1,),
+            dimension_numbers=(
+                "NWC",
+                "WIO",
+                "NWC",
+            ),  # specify data format: batch, spatial, channel
+            feature_group_count=1,  # for grouped (channel-wise) convolution, set >1
+        )
+        + params["conv_b"]
+    )
     x = jax.nn.silu(x)
-    x = selective_scan(x,Δ,params['A'],B,C)
-
+    x = selective_scan(x, Δ, params["A"], B, C)
     # skip connection goes back in
+    # (B, L, dim_h) * (B, L, dim_h) -> (B, L, dim_h)
     x = x * x_skip
-
     # project merged x to output y
-    y = x @ params['out_proj_w'] + params['out_proj_b']
-
+    # (B, L, dim_h) @ (dim_h, dim_c) -> (B, L, dim_c)
+    y = x @ params["out_proj_w"] + params["out_proj_b"]
     # output sequence y with shape [B, L, dim_c]
     return y
+
 
 def rms_norm(x, weight, bias, eps=1e-6):
     variance = jnp.mean(x**2, axis=-1, keepdims=True)
@@ -115,14 +115,15 @@ def rms_norm(x, weight, bias, eps=1e-6):
 def model(x, params):
     # model is a stack of mamba blocks
     for block_params in params["residual_blocks"]:
-        y = mamba_block(x, block_params['mamba_params'])
+        y = mamba_block(x, block_params["mamba_params"])
         # apply rms norm after each block
-        y = rms_norm(y, block_params['norm_w'], block_params['norm_b'])
+        y = rms_norm(y, block_params["norm_w"], block_params["norm_b"])
         # skip connection
         x += y
     # classification head
     logits = x @ params["class_head_w"] + params["class_head_b"]
     return logits
+
 
 def cross_entropy_loss(params, batch):
     """Computes cross-entropy loss for Mamba model on MNIST."""
@@ -155,22 +156,12 @@ if __name__ == "__main__":
             perm = rng.permutation(num_train)
             for i in range(num_batches):
                 batch_idx = perm[i * args.batch_size : (i + 1) * args.batch_size]
-                yield jnp.expand_dims(train_images[batch_idx], axis=-1), train_labels[batch_idx]
+                yield jnp.expand_dims(train_images[batch_idx], axis=-1), train_labels[
+                    batch_idx
+                ]
 
     batches = data_stream()
 
-    # Parameters
-    dt_init_std = args.dt_rank**-0.5
-    dt_init_floor = 1e-4
-    dt = jnp.exp(
-        random.uniform(
-            jax.random.PRNGKey(6),
-            (args.dim_e * args.dim_c,),
-            minval=jnp.log(args.dt_min),
-            maxval=jnp.log(args.dt_max),
-        )
-    ).clip(min=dt_init_floor)
-    inv_dt = dt + jnp.log(-jnp.expm1(-dt))
     params = {
         "residual_blocks": [
             {
@@ -178,20 +169,16 @@ if __name__ == "__main__":
                     # input projection
                     "in_proj_w": random.normal(rng, (args.dim_c, args.dim_h)),
                     "in_proj_b": jnp.zeros(args.dim_h),
-
                     # SSM parameters
-                    "B_proj_w" : random.normal(rng, (args.dim_h, args.dim_e * args.dim_h)),
-                    "C_proj_w" : random.normal(rng, (args.dim_h, args.dim_e * args.dim_h)),
-                    "Δ_proj_w" : random.normal(rng, (args.dim_h, args.dim_Δ)),
-                    "A" : jnp.eye(args.dim_e * args.dim_h) + jnp.tril(jnp.ones((args.dim_e * args.dim_h, args.dim_e * args.dim_h))),
-
+                    "B_proj_w": random.normal(rng, (args.dim_h, args.dim_h)),
+                    "C_proj_w": random.normal(rng, (args.dim_h, args.dim_h)),
+                    "Δ_proj_w": random.normal(rng, (args.dim_h, args.dim_Δ)),
+                    "A": jnp.eye(args.dim_h) + jnp.tril(jnp.ones((args.dim_h, args.dim_h)), -1),
                     # causal 1D convolution layer
-                    "conv_w" : random.normal(rng, (args.d_conv, args.dim_e * args.dim_h, 1)),
-
+                    "conv_w": random.normal(rng, (args.dim_conv, args.dim_h, 1)),
                     # output projection
                     "out_proj_w": random.normal(rng, (args.dim_h, args.dim_c)),
                     "out_proj_b": jnp.zeros(args.dim_c),
-
                 },
                 # RMS normalization layer
                 "norm_w": jnp.ones(args.dim_c),
@@ -205,7 +192,9 @@ if __name__ == "__main__":
     }
 
     # Optimizer
-    opt_init, opt_update, get_params = optimizers.adam(args.learning_rate, args.b1, args.b2)
+    opt_init, opt_update, get_params = optimizers.adam(
+        args.learning_rate, args.b1, args.b2
+    )
 
     @jit
     def update(i, opt_state, batch):
