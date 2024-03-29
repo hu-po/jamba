@@ -72,13 +72,13 @@ def mamba_block(x, params):
     B = x @ params['B_proj_w']
 
     # project input sequence x to C (output matrix)
-    # (B, L, dim_c) @ (dim_c, dim_c*dim_e) -> (B, L, dim_c*dim_e)
+    # (B, L, dim_h) @ (dim_h, dim_h*dim_e) -> (B, L, dim_h*dim_e)
     C = x @ params['C_proj_w']
 
     # project input x to Δ
-    # (B, L, dim_c) @ (dim_c, dim_Δ) -> (B, L, dim_Δ)
+    # (B, L, dim_h) @ (dim_h, dim_Δ) -> (B, L, dim_Δ)
     Δ = x @ params['Δ_proj_w']
-    # broadcast Δ to shape (B, L, dim_c*dim_e)
+    # broadcast Δ to shape (B, L, dim_h*dim_e)
     Δ = jnp.broadcast_to(Δ, (Δ.shape[0], Δ.shape[1], params['B_proj_w'].shape[1]))
 
     # causal 1D convolution layer
